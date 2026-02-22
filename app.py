@@ -31,67 +31,53 @@ def load_model():
 
 
 def preprocess_raw_data(df, scaler, scale_cols):
-    """
-    Preprocess raw student CSV to match the training format.
-    Handles: drop student_id, encode categoricals, scale numerics.
-    """
     df = df.copy()
 
-    # Drop student_id if present
     if "student_id" in df.columns:
         df.drop(columns=["student_id"], inplace=True)
 
-    # Drop final_grade if present (we are predicting it)
     if "final_grade" in df.columns:
         df.drop(columns=["final_grade"], inplace=True)
 
-    # Lowercase all string columns
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype(str).str.strip().str.lower()
 
-    # Binary encode: yes/no → 1/0
     binary_map = {"yes": 1, "no": 0}
     for col in ["internet_access", "extra_activities"]:
         if col in df.columns and df[col].dtype == "object":
             df[col] = df[col].map(binary_map).fillna(0).astype(int)
 
-    # Ordinal encode: travel_time
     travel_map = {"<15 min": 0, "15-30 min": 1, "30-60 min": 2, ">60 min": 3}
     if "travel_time" in df.columns and df["travel_time"].dtype == "object":
         df["travel_time"] = df["travel_time"].map(travel_map).fillna(0).astype(int)
 
-    # Ordinal encode: parent_education
     edu_map = {"no formal": 0, "high school": 1, "diploma": 2, "graduate": 3, "post graduate": 4, "phd": 5}
     if "parent_education" in df.columns and df["parent_education"].dtype == "object":
         df["parent_education"] = df["parent_education"].map(edu_map).fillna(0).astype(int)
 
-    # One-hot encode: gender, school_type, study_method
     nominal_cols = [c for c in ["gender", "school_type", "study_method"] if c in df.columns]
     if nominal_cols:
         df = pd.get_dummies(df, columns=nominal_cols, drop_first=False, dtype=int)
 
-    # Scale numeric columns (same as training)
-    cols_to_scale = [c for c in scale_cols if c in df.columns]
-    if cols_to_scale:
-        df[cols_to_scale] = scaler.transform(df[cols_to_scale])
+    if scaler is not None and scale_cols:
+        cols_to_scale = [c for c in scale_cols if c in df.columns]
+        if cols_to_scale:
+            df[cols_to_scale] = scaler.transform(df[cols_to_scale])
 
     return df
 
 
 def align_columns(df, expected_features):
-    """Add missing columns as 0, remove extra columns, reorder."""
     for col in expected_features:
         if col not in df.columns:
             df[col] = 0
     return df[expected_features]
 
 
-# --- Page Config ---
 st.set_page_config(page_title="Student Performance Predictor", page_icon="🎓", layout="wide")
 st.title("🎓 Student Performance Predictor")
 st.write("Upload a student CSV file to get **grade predictions**, **classifications**, and **study recommendations**.")
 
-# --- File Upload ---
 uploaded_file = st.file_uploader("Upload Student Data (CSV)", type=["csv"])
 
 if uploaded_file is not None:
@@ -99,13 +85,19 @@ if uploaded_file is not None:
     st.subheader("📄 Uploaded Data")
     st.dataframe(raw_df)
 
-    # Save original scores before preprocessing (for recommendations)
     original_df = raw_df.copy()
 
-    # Load model, features, scaler
-    model, feature_names, scaler, scale_cols = load_model()
+    # --- FIXED UNPACKING ---
+    loaded = load_model()
+    if len(loaded) == 4:
+        model, feature_names, scaler, scale_cols = loaded
+    elif len(loaded) == 2:
+        model, feature_names = loaded
+        scaler = None
+        scale_cols = []
+    else:
+        raise ValueError("Unexpected number of objects returned from load_model()")
 
-    # Check if data needs preprocessing (has string columns)
     has_strings = raw_df.select_dtypes(include="object").shape[1] > 0
     if has_strings:
         processed_df = preprocess_raw_data(raw_df, scaler, scale_cols)
@@ -114,10 +106,8 @@ if uploaded_file is not None:
         if "final_grade" in processed_df.columns:
             processed_df.drop(columns=["final_grade"], inplace=True)
 
-    # Align to expected features
     input_df = align_columns(processed_df, feature_names)
 
-    # --- Predictions ---
     predictions = model.predict(input_df)
 
     results_df = original_df.copy()
@@ -127,7 +117,6 @@ if uploaded_file is not None:
     st.subheader("📊 Predictions & Classifications")
     st.dataframe(results_df)
 
-    # --- Summary charts ---
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Grade Distribution**")
@@ -136,7 +125,6 @@ if uploaded_file is not None:
         st.write("**Classification Distribution**")
         st.bar_chart(results_df["Classification"].value_counts())
 
-    # --- Recommendations ---
     st.subheader("💡 Study Recommendations")
 
     for idx, row in results_df.iterrows():
@@ -148,6 +136,7 @@ if uploaded_file is not None:
             "english_score": row.get("english_score", 100),
             "internet_access": row.get("internet_access", 1),
         }
+
         predicted_category = f"Grade {predictions[idx]}"
         recs = generate_recommendations(student_data, predicted_category)
 
@@ -155,7 +144,6 @@ if uploaded_file is not None:
             for i, r in enumerate(recs, 1):
                 st.write(f"{i}. {r}")
 
-    # --- Download ---
     st.subheader("📥 Download Results")
     csv_data = results_df.to_csv(index=False)
     st.download_button("Download Predictions as CSV", csv_data, "predictions.csv", "text/csv")
