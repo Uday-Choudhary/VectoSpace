@@ -18,11 +18,8 @@ venv.bak/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Datasets and Models (Ignore large files to prevent Git LFS issues)
-# Note: If you want to push your models/datasets, you can comment these out
-src/ml/models/*.pkl
-src/ml/models/*.h5
-src/ml/models/*.joblib
+# Datasets and Models
+# Large model files are tracked in git for deployment
 
 # OS generated files
 .DS_Store
