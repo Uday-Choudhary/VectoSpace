@@ -23,13 +23,17 @@ def load_model():
         model = pickle.load(f)
     with open(os.path.join(MODEL_DIR, "feature_names.pkl"), "rb") as f:
         features = pickle.load(f)
-    return model, features
+    with open(os.path.join(MODEL_DIR, "scaler.pkl"), "rb") as f:
+        scaler = pickle.load(f)
+    with open(os.path.join(MODEL_DIR, "scale_cols.pkl"), "rb") as f:
+        scale_cols = pickle.load(f)
+    return model, features, scaler, scale_cols
 
 
-def preprocess_raw_data(df):
+def preprocess_raw_data(df, scaler, scale_cols):
     """
     Preprocess raw student CSV to match the training format.
-    Handles: drop student_id, encode categoricals, one-hot encode nominals.
+    Handles: drop student_id, encode categoricals, scale numerics.
     """
     df = df.copy()
 
@@ -66,6 +70,11 @@ def preprocess_raw_data(df):
     if nominal_cols:
         df = pd.get_dummies(df, columns=nominal_cols, drop_first=False, dtype=int)
 
+    # Scale numeric columns (same as training)
+    cols_to_scale = [c for c in scale_cols if c in df.columns]
+    if cols_to_scale:
+        df[cols_to_scale] = scaler.transform(df[cols_to_scale])
+
     return df
 
 
@@ -93,13 +102,13 @@ if uploaded_file is not None:
     # Save original scores before preprocessing (for recommendations)
     original_df = raw_df.copy()
 
-    # Load model and feature names
-    model, feature_names = load_model()
+    # Load model, features, scaler
+    model, feature_names, scaler, scale_cols = load_model()
 
     # Check if data needs preprocessing (has string columns)
     has_strings = raw_df.select_dtypes(include="object").shape[1] > 0
     if has_strings:
-        processed_df = preprocess_raw_data(raw_df)
+        processed_df = preprocess_raw_data(raw_df, scaler, scale_cols)
     else:
         processed_df = raw_df.copy()
         if "final_grade" in processed_df.columns:
