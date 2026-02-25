@@ -21,13 +21,11 @@ CATEGORY_MAP = {0: "At-Risk", 1: "Below-Average", 2: "Average", 3: "Above-Averag
 def load_model():
     with open(os.path.join(MODEL_DIR, "random_forest.pkl"), "rb") as f:
         model = pickle.load(f)
-    with open(os.path.join(MODEL_DIR, "feature_names.pkl"), "rb") as f:
-        features = pickle.load(f)
     with open(os.path.join(MODEL_DIR, "scaler.pkl"), "rb") as f:
         scaler = pickle.load(f)
     with open(os.path.join(MODEL_DIR, "scale_cols.pkl"), "rb") as f:
         scale_cols = pickle.load(f)
-    return model, features, scaler, scale_cols
+    return model, scaler, scale_cols
 
 
 def preprocess_raw_data(df, scaler, scale_cols):
@@ -67,11 +65,6 @@ def preprocess_raw_data(df, scaler, scale_cols):
     return df
 
 
-def align_columns(df, expected_features):
-    for col in expected_features:
-        if col not in df.columns:
-            df[col] = 0
-    return df[expected_features]
 
 
 st.set_page_config(page_title="Student Performance Predictor", page_icon="🎓", layout="wide")
@@ -87,16 +80,7 @@ if uploaded_file is not None:
 
     original_df = raw_df.copy()
 
-    # --- FIXED UNPACKING ---
-    loaded = load_model()
-    if len(loaded) == 4:
-        model, feature_names, scaler, scale_cols = loaded
-    elif len(loaded) == 2:
-        model, feature_names = loaded
-        scaler = None
-        scale_cols = []
-    else:
-        raise ValueError("Unexpected number of objects returned from load_model()")
+    model, scaler, scale_cols = load_model()
 
     has_strings = raw_df.select_dtypes(include="object").shape[1] > 0
     if has_strings:
@@ -106,7 +90,8 @@ if uploaded_file is not None:
         if "final_grade" in processed_df.columns:
             processed_df.drop(columns=["final_grade"], inplace=True)
 
-    input_df = align_columns(processed_df, feature_names)
+    input_df = processed_df.copy()
+    input_df = input_df[model.feature_names_in_]
 
     predictions = model.predict(input_df)
 
@@ -114,8 +99,13 @@ if uploaded_file is not None:
     results_df["Predicted Grade"] = [GRADE_MAP.get(p, f"Grade {p}") for p in predictions]
     results_df["Classification"] = [CATEGORY_MAP.get(p, "Unknown") for p in predictions]
 
-    st.subheader("📊 Predictions & Classifications")
-    st.dataframe(results_df)
+    # --- Summary metrics ---
+    st.subheader("📊 Summary")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Students", len(results_df))
+    grade_counts = pd.Series(predictions).value_counts()
+    m2.metric("Most Common Grade", GRADE_MAP.get(grade_counts.idxmax(), "N/A"))
+    m3.metric("Most Common Category", CATEGORY_MAP.get(grade_counts.idxmax(), "N/A"))
 
     col1, col2 = st.columns(2)
     with col1:
@@ -125,28 +115,60 @@ if uploaded_file is not None:
         st.write("**Classification Distribution**")
         st.bar_chart(results_df["Classification"].value_counts())
 
-    st.subheader("💡 Study Recommendations")
+    # --- Search for a specific student ---
+    st.subheader("🔍 Search Student")
+    st.write("Search by **student name**, **student ID**, or **row number** to view individual predictions and recommendations.")
 
-    for idx, row in results_df.iterrows():
-        student_data = {
-            "attendance_percentage": row.get("attendance_percentage", 100),
-            "study_hours": row.get("study_hours", 10),
-            "math_score": row.get("math_score", 100),
-            "science_score": row.get("science_score", 100),
-            "english_score": row.get("english_score", 100),
-            "internet_access": row.get("internet_access", 1),
-        }
+    search_query = st.text_input("Enter student name, ID, or row number", placeholder="e.g. John, STU001, or 5")
 
-        predicted_category = f"Grade {predictions[idx]}"
-        recs = generate_recommendations(student_data, predicted_category)
+    if search_query.strip():
+        query = search_query.strip()
+        matched = pd.DataFrame()
 
-        with st.expander(f"Student {idx + 1} — {row['Predicted Grade']} ({row['Classification']})"):
-            for i, r in enumerate(recs, 1):
-                st.write(f"{i}. {r}")
+        # Try matching by row number first (1-indexed for user friendliness)
+        if query.isdigit():
+            row_num = int(query) - 1
+            if 0 <= row_num < len(results_df):
+                matched = results_df.iloc[[row_num]]
 
-    st.subheader("📥 Download Results")
+        # If no row match, search across student_id and student_name columns
+        if matched.empty:
+            query_lower = query.lower()
+            for col in ["student_id", "student_name", "name", "id"]:
+                if col in results_df.columns:
+                    mask = results_df[col].astype(str).str.lower().str.contains(query_lower, na=False)
+                    matched = pd.concat([matched, results_df[mask]])
+            matched = matched.drop_duplicates()
+
+        if matched.empty:
+            st.warning(f"No student found matching **\"{query}\"**. Try a different name, ID, or row number (1–{len(results_df)}).")
+        else:
+            st.success(f"Found **{len(matched)}** student(s)")
+            st.dataframe(matched)
+
+            # Generate recommendations only for matched students
+            st.subheader("💡 Study Recommendations")
+            for idx in matched.index:
+                row = results_df.loc[idx]
+                student_data = {
+                    "attendance_percentage": row.get("attendance_percentage", 100),
+                    "study_hours": row.get("study_hours", 10),
+                    "math_score": row.get("math_score", 100),
+                    "science_score": row.get("science_score", 100),
+                    "english_score": row.get("english_score", 100),
+                    "internet_access": row.get("internet_access", 1),
+                }
+                predicted_category = f"Grade {predictions[idx]}"
+                recs = generate_recommendations(student_data, predicted_category)
+
+                with st.expander(f"Student {idx + 1} — {row['Predicted Grade']} ({row['Classification']})", expanded=True):
+                    for i, r in enumerate(recs, 1):
+                        st.write(f"{i}. {r}")
+
+    # --- Download full results ---
+    st.subheader("📥 Download Full Results")
     csv_data = results_df.to_csv(index=False)
-    st.download_button("Download Predictions as CSV", csv_data, "predictions.csv", "text/csv")
+    st.download_button("Download All Predictions as CSV", csv_data, "predictions.csv", "text/csv")
 
 else:
     st.info("👆 Please upload a CSV file to get started.")
