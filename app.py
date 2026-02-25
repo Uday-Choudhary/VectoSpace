@@ -90,7 +90,15 @@ if uploaded_file is not None:
         if "final_grade" in processed_df.columns:
             processed_df.drop(columns=["final_grade"], inplace=True)
 
+    #Align input to model
     input_df = processed_df.copy()
+
+    #Add any missing columns as 0
+    for col in model.feature_names_in_:
+        if col not in input_df.columns:
+            input_df[col] = 0
+
+    #Keep only the required columns in correct order
     input_df = input_df[model.feature_names_in_]
 
     predictions = model.predict(input_df)
@@ -99,7 +107,7 @@ if uploaded_file is not None:
     results_df["Predicted Grade"] = [GRADE_MAP.get(p, f"Grade {p}") for p in predictions]
     results_df["Classification"] = [CATEGORY_MAP.get(p, "Unknown") for p in predictions]
 
-    # --- Summary metrics ---
+    #Summary metrics
     st.subheader("📊 Summary")
     m1, m2, m3 = st.columns(3)
     m1.metric("Total Students", len(results_df))
@@ -115,7 +123,7 @@ if uploaded_file is not None:
         st.write("**Classification Distribution**")
         st.bar_chart(results_df["Classification"].value_counts())
 
-    # --- Search for a specific student ---
+    #Search for a specific student
     st.subheader("🔍 Search Student")
     st.write("Search by **student name**, **student ID**, or **row number** to view individual predictions and recommendations.")
 
